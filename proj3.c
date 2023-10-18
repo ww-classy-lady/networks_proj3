@@ -1,3 +1,9 @@
+//(i) Wendy Wu
+//(ii) wxw428
+//(iii) proj3.c
+//(iv) 10/10/2023
+//(v) getting http request and send back a response and optional content if passed requirement.
+//will first prompt user to input arguments in combinations of -n, -a, and -d
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +22,7 @@
 #define PROTOCOL "tcp"
 #define BUFLEN 1024
 #define QLEN 1
+#define httpLength 5
 
 FILE *sp;
 bool nDetected = false;
@@ -27,7 +34,13 @@ char* auth_token = NULL;
 char* httpRequest = NULL;
 char* endLine = "\r\n\r\n";
 char* rn = "\r\n";
-char* res= "";
+char* res;
+char* firstLine = NULL;
+char* method = NULL;
+char* argument = NULL;
+char* httpVersion = NULL;
+char* firstRN = NULL;
+char* def = "/homepage.html"; //default if arg = "/"
 //Parse command line
 //get server accepting connections
 //print http requests
@@ -82,6 +95,146 @@ void parseargs(int argc, char *argv [])
         usage (argv [0]); //gives the program usage details in the usage function above
     }
 }
+bool check400(char* request)
+{
+    /*
+   – The request must start with a line of the form “METHOD ARGUMENT HTTP/VERSION”.
+– Each line in the request must be terminated by a carriage-return and linefeed (“\r\n”).
+– The HTTP request must end with a “blank” line that consists only of a carriage-return and
+linefeed (“\r\n”).
+– The HTTP request may contain additional, arbitrary header lines. These must be accepted, but
+will be ignored by your server.
+   */
+   //res = "HTTP/1.1 400 Malformed Request\r\n\r\n" if fails
+   //printf("%s", request); 
+    /*for (int i = 0; point[i] != '\0'; i++) {
+        if (point[i] == '\r') {
+            printf("\\r");
+        } else if (point[i] == '\n') {
+            printf("\\n");
+        } else {
+            printf("%c", point[i]);
+        }
+   }*/
+    //"GET / HTTP/1.1\n\r\n"
+   char* copy = (char *)malloc(strlen(request)+1);
+   copy[0] = '\0';
+   strcpy(copy, request);
+   bool isMalformed = false; //initially not malformed
+   int count = 1;
+   char* current = strstr(copy, rn); //find the first occurrence 
+   char* begin = copy;
+
+   char* end = NULL;
+   int numFields = 0;
+   char* fields[3];
+   while(current!=NULL)
+   {
+        int length = current - begin;
+        char* point = (char* )malloc(length+1);
+        point[0] = '\0';
+        strncpy(point, begin, length);
+        if(count == 1)
+        {
+            char* firstLine = (char* )malloc(strlen(point)+1);
+            firstLine[0] = '\0';
+            strcpy(firstLine, point);
+            while(strtok(firstLine, " ")!=NULL)
+            {
+                if(numFields == 0)
+                {
+                    firstLine = NULL;
+                }
+                numFields++;
+            }
+            if(numFields!=3)
+            {
+                isMalformed = true;
+                break;
+            }
+        }
+        if(strchr(point, '\r')!=NULL || strchr(point, '\n')!=NULL)
+        {
+            isMalformed = true;
+            break;
+        }
+        begin = current + strlen(rn);
+        current = strstr(begin, rn);
+        if(current == NULL)
+        {
+            break;
+        }
+        count++;
+   }
+    return isMalformed;
+}   
+void parseHTTP()
+{
+    //parse the first line of the http request into METHOD, ARGUMENT, and HTTP/VERSION
+    //parse first line
+   int count = 1;
+   firstRN = strstr(httpRequest, rn); //find the first occurrence 
+   int length = firstRN - httpRequest;
+   firstLine= (char* )malloc(length+1);
+   firstLine[0] = '\0';
+   strncpy(firstLine, httpRequest, length);
+   //parse method
+   char* meth = strtok(firstLine, " ");
+   method = (char* )malloc(strlen(meth) + 1);
+   method[0] = '\0';
+   int mLength = strlen(meth);
+   strcpy(method, meth);
+   //argument
+   char* arg = strtok(NULL, " ");
+   argument = (char* )malloc(strlen(arg) + 1);
+   argument[0] = '\0';
+   int aLength = strlen(arg);
+   strcpy(argument, arg);
+   //httpversion
+   char* v = strtok(NULL, " ");
+   httpVersion = (char* )malloc(strlen(v) + 1);
+   httpVersion[0] = '\0';
+   int vLength = strlen(v);
+   strcpy(httpVersion, v);
+}
+bool isHTTP(char* version)
+{
+    char firstFive[httpLength];
+    strncpy(firstFive, version , httpLength);
+    if(strcmp(firstFive, "HTTP/") !=0)
+    {
+        //printf("Does not start with HTTP/\n");
+        return false;
+    }
+    else
+    {
+        //printf("Does start with HTTP/\n");
+        return true;
+    }
+    //check if the HTTP/VERSION strictly (case sensitive) match the HTTP/ portion for the 5 chracters HTTP/
+    
+}
+bool getOrShutdown(char* method)
+{
+    //will return false if not get or shutdown
+    if((strcmp(method, "GET") != 0) &&(strcmp(method, "SHUTDOWN")!=0))
+    {
+        return false;
+    }
+    return true;
+}
+bool doesSlashBegin(char* argu)
+{
+    char first[1];
+    strncpy(first, argu , 1);
+    if(strcmp(first, "\\")!=0)
+    {
+        return false;
+    }
+    else{
+        return true;
+    }
+}
 int sockets(){
 
     struct sockaddr_in sin;
@@ -89,7 +242,6 @@ int sockets(){
     struct protoent *protoinfo;
     unsigned int addrlen;
     int sd, sd2;
-    
     /*if (argc != REQUIRED_ARGC)
         usage (argv [0]);
 */
@@ -141,12 +293,14 @@ int sockets(){
         strncat(httpRequest, store, infoRead); //transfer the string from store to httpRequest by infoRead number of bytes
         if(strstr(httpRequest, rn)!=NULL) //check if we reached the end of the http request since it means terminated by \r\n
         //and if we have \r\n at the end we can end reading
+        //from professor's simplication we can always assume it ends with \r\n 
         { 
             break;
         }
     }
     
-    printf("%s", httpRequest); //at this point the httpRequest will only contain the first line without \r\n\r\n for now
+    //printf("%s", httpRequest); //at this point the httpRequest will be complete
+    res = NULL; //initialize message to null for now;
     //prinf("does httprequest have '\r\n\r\n'?%s", strstr(httpRequest, "\r\n"));
     /* list of priority for HTTP response only return 1*/
     /*
@@ -161,6 +315,64 @@ int sockets(){
         (b) 200 OK
         (c) 404 File Not Found
     */
+   
+   while(true)
+   {
+        if(check400(httpRequest))
+        { /* 400 malformed request check */ //need more testing but pass the test case on webpage
+            res = "HTTP/1.1 400 Malformed Request\r\n\r\n";
+            break; //go straight to write message and end this current connection 
+        }
+        else{
+            parseHTTP(); //parse method argument, httpversion
+            if(!isHTTP(httpVersion))
+            {
+                res = "HTTP/1.1 501 Protocol Not Implemented\r\n\r\n";
+                break;
+            }
+            else
+            {
+                if(!getOrShutdown(method))
+                {
+                    //if not get or shutdown in the method
+                    res = "HTTP/1.1 405 Unsupported Method\r\n\r\n";
+                    break;
+                }
+                else if(strcmp(method, "GET") == 0){
+                    //step 1:
+                    //1. When the requested file does not begin with a “/”, a minimal HTTP response of “HTTP/1.1 406
+                    //Invalid Filename\r\n\r\n” must be returned.
+                    if(!doesSlashBegin(argument))
+                    {
+                        res = "HTTP/1.1 406 Invalid Filename\r\n\r\n";
+                        break;
+                    }
+                    else{
+                        //cases 2,3,4
+                        /*2. When the requested file exists, a minimal HTTP response header consisting of “HTTP/1.1 200
+                            OK\r\n\r\n” will be given, followed by the contents of the given file.
+                            3. When the requested file cannot be opened (e.g., because it does not exist), a minimal response
+                                header of “HTTP/1.1 404 File Not Found\r\n\r\n” will be returned (with no payload content).
+4. When the requested file is “/” the default file of “/homepage.html” will be used as the filename.
+The web server will then leverage either approach 2 or 3 above based on whether the file exists
+or not.*/
+                        res = "hello world\n";
+                        break;
+                    }
+                }
+                else if(strcmp(method, "SHUTDOWN") == 0)
+                {
+                    //close (sd);
+                    //exit (0);
+                    res = "Entered SHUTDOWN!!!n";
+                    break;
+                }
+                else{
+                    //invalid?
+                }
+            }
+        }
+   }
     /* write message to the connection */
     if(write (sd2, res,strlen (res)) < 0)
         errexit ("error writing message: %s", res);
@@ -173,14 +385,14 @@ int sockets(){
 }
 int main(int argc, char *argv [])
 {
-    parseargs(argc, argv);
-    sockets();
-    if (access(document_directory, F_OK) != -1) {
+    if (access("/home/wxw428/project3/doc-root/5.txt", F_OK) != -1) {
         // File exists
         printf("File exists in the current directory.\n");
     } else {
         // File doesn't exist
         printf("File does not exist in the current directory.\n");
     }
+    parseargs(argc, argv);
+    sockets();
     return 0;
 }
