@@ -2,8 +2,8 @@
 //(ii) wxw428
 //(iii) proj3.c
 //(iv) 10/10/2023
-//(v) getting http request and send back a response and optional content if passed requirement.
-//will first prompt user to input arguments in combinations of -n, -a, and -d
+//(v) proj3.c: getting http request and send back a response and optional content if needed.
+//will first prompt user to input arguments in any order of the combination of -n, -a, and -d
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <stdbool.h> 
+#include <dirent.h>
 
 #define ERROR 1
 #define REQUIRED_ARGC 3
@@ -28,15 +29,15 @@
 #define MAX_PORT 65535
 
 FILE *sp;
-bool nDetected = false;
+bool nDetected = false; //the n,d,aDetected fields are checking whether we have received -n, -d, -a in the command line
 bool dDetected = false;
 bool aDetected = false;
 char* port = NULL;
 char* document_directory = NULL;
 char* auth_token = NULL;
 char* httpRequest = NULL;
-char* endLine = "\r\n\r\n";
-char* rn = "\r\n";
+//char* endLine = "\r\n\r\n";
+char* rn = "\r\n"; //check for \r\n using var rn
 char* res;
 char* firstLine = NULL;
 char* method = NULL;
@@ -45,21 +46,15 @@ char* httpVersion = NULL;
 char* firstRN = NULL;
 char* def = "/homepage.html"; //default if arg = "/"
 bool wroteContent = false;
-FILE *loc; //local file
-//Parse command line
-//get server accepting connections
-//print http requests
+FILE *loc; //local file that will be used to read and send content
 
-//parse http request
-//work through the GET method and error cases
-//implement SHUTDOWN method
-//final cleanups
-int usage (char *progname)
+//usage: program usage
+int usage (char *progname) //program usage
 {
-    fprintf (stderr,"usage: %s host port\n", progname);
+    fprintf (stderr,"usage: %s -n port -a auth -d document_directory \n", progname);
     exit (ERROR);
 }
-
+//errexit: give an error to command line when detected
 int errexit (char *format, char *arg)
 {
     fprintf (stderr,format,arg);
@@ -75,20 +70,20 @@ void parseargs(int argc, char *argv [])
         switch(opt)
         {
             case 'n':
-                nDetected = true; //-u is detected, only if there is a url after it
-                port = optarg; //set the url to be parsed in parseURL to the next string after -u
+                nDetected = true; //-n is detected, only if there is a port
+                port = optarg; //set port
                 break;
             case 'd': 
-                dDetected = true; //-o is detected, only if there is a filename after it
-                document_directory = optarg; //set the url to be parsed in parseURL to the next string after -u
+                dDetected = true; //-d is detected, only if there is document_directory
+                document_directory = optarg; //set the document_directory to the argument after -d
                 break;
             case 'a':
-                aDetected = true; //-d is detected
-                auth_token = optarg;
+                aDetected = true; //-a is detected, only if there is auth_token after it
+                auth_token = optarg; //store auth_token to argument after -a
                 break;
             case '?':
                 fprintf(stderr, "ERROR: unknown command line arguments entered. Please try again.\n./");
-                //anything that is not -u, -o, -d, -q, or -r will prompt program to give an error message and terminate program
+                //anything that is not -n, -d, or -a will prompt program to give an error message and terminate program
                 exit(0);
             default:
                 usage(argv[0]); 
@@ -100,64 +95,62 @@ void parseargs(int argc, char *argv [])
         usage (argv[0]); //gives the program usage details in the usage function above
     }
 }
+//check400: takes in the http request and checks that there is always \r\n after every line and if that is not followed will throw malformed request to client
 bool check400(char* request)
 {
-   char* copy = (char *)malloc(strlen(request)+1);
-   copy[0] = '\0';
-   strcpy(copy, request);
+   int counter = 1; //line counter
+   char* copy = (char *)malloc(strlen(request)+1); //allocate the space amount of space from request to copy
+   copy[0] = '\0'; //null terminate
+   strcpy(copy, request); //copy the request over to copy so we can iterate through copy
    bool isMalformed = false; //initially not malformed
-   int count = 1;
-   char* current = strstr(copy, rn); //find the first occurrence 
-   char* begin = copy;
-
-   char* end = NULL;
-   int numFields = 0;
-   char* fields[NUM_FIELDS];
-   while(current!=NULL)
+   char* current = strstr(copy, rn); //find the first occurrence of \r\n. Will always have at least one because will always terminate request with \r\n
+   char* begin = copy; //set the begin of the line we will be looking at at that moment
+   int numFields = 0; //counter for the number of arguments for the first line, should have 3 in the http request's first line
+   while(current!=NULL) //while the pointer to the end is not null
    {
-        int length = current - begin;
-        char* point = (char* )malloc(length+1);
+        int length = current - begin; //end - start = length of the current line
+        char* point = (char* )malloc(length+1); //point stores the current line by the way
         point[0] = '\0';
-        strncpy(point, begin, length);
-        if(count == 1)
+        strncpy(point, begin, length); //copy from begin the number of characters we determined from the length as the current line, which point stores
+        if(counter == 1) //first line check
         {
             char* firstLine = (char* )malloc(strlen(point)+1);
             firstLine[0] = '\0';
-            strcpy(firstLine, point);
-            while(strtok(firstLine, " ")!=NULL)
+            strcpy(firstLine, point); 
+            while(strtok(firstLine, " ")!=NULL) //get the argument separated by a single space
             {
-                if(numFields == 0)
+                if(numFields == 0) //if just the first field then we will set the rest of the first params to be NULL 
                 {
                     firstLine = NULL;
                 }
                 numFields++;
             }
-            if(numFields!=NUM_FIELDS)
+            if(numFields!=NUM_FIELDS) //if not 3 fields, it is malformed
             {
                 isMalformed = true;
                 break;
             }
         }
-        if(strchr(point, '\r')!=NULL || strchr(point, '\n')!=NULL)
+        if(strchr(point, '\r')!=NULL || strchr(point, '\n')!=NULL) //if there is any \r or \n in the request then that means the \r\n pattern is off and this req is malformed
         {
             isMalformed = true;
             break;
         }
-        begin = current + strlen(rn);
-        current = strstr(begin, rn);
+        begin = current + strlen(rn); //move begin to past the line we just examined and the rn too
+        current = strstr(begin, rn); //find the pointer to the occurrence of rn in the next line
         if(current == NULL)
         {
             break;
         }
-        count++;
+        counter++; //increment line count
    }
     return isMalformed;
-}   
+}
+//parseHTTP: parse the httpRequest so we can store the corresponding fields for method, argument, and httpVersion   
 void parseHTTP()
 {
     //parse the first line of the http request into METHOD, ARGUMENT, and HTTP/VERSION
     //parse first line
-   int count = 1;
    firstRN = strstr(httpRequest, rn); //find the first occurrence 
    int length = firstRN - httpRequest;
    firstLine= (char* )malloc(length+1);
@@ -167,19 +160,16 @@ void parseHTTP()
    char* meth = strtok(firstLine, " ");
    method = (char* )malloc(strlen(meth) + 1);
    method[0] = '\0';
-   int mLength = strlen(meth);
    strcpy(method, meth);
    //argument
    char* arg = strtok(NULL, " ");
    argument = (char* )malloc(strlen(arg) + 1);
    argument[0] = '\0';
-   int aLength = strlen(arg);
    strcpy(argument, arg);
    //httpversion
    char* v = strtok(NULL, " ");
    httpVersion = (char* )malloc(strlen(v) + 1);
    httpVersion[0] = '\0';
-   int vLength = strlen(v);
    strcpy(httpVersion, v);
 }
 //isHTTP: check if the HTTP/VERSION strictly (case sensitive) match the HTTP/ portion for the 5 chracters HTTP/
@@ -191,11 +181,9 @@ bool isHTTP(char* version)
     {
         return false;
     }
-    else
-    {
-        return true;
-    }
+   return true;
 }
+//getOrShutDown: compares the input method to GET or SHUTDOWN, if not one of them will throw the corresponding error in sockets method
 bool getOrShutdown(char* method)
 {
     //will return false if not get or shutdown
@@ -205,68 +193,66 @@ bool getOrShutdown(char* method)
     }
     return true;
 }
+//doesSlashBegin: checks if the argument begin with a slash, if not, throw corresponding error in sockets method
 bool doesSlashBegin(char* argu)
 {
     if(argu[0] == '/')
     {
         return true;
     }
-    else{
-        return false;
-    }
+    return false;
 }
-
+//sockets: makes the connection to the client, listens for connection/request, send over response. Loop until reach the shutdown with correct argument field as auth_token.
 int sockets(){
 
     struct sockaddr_in sin;
     struct sockaddr addr;
     struct protoent *protoinfo;
     unsigned int addrlen;
-    int sd, sd2;
+    int sd, sd2; //sd is the listening socket. sd2 is the client socket sending over information/reequest
     /*if (argc != REQUIRED_ARGC)
         usage (argv [0]);
 */
     /* determine protocol */
-    if ((protoinfo = getprotobyname (PROTOCOL)) == NULL)
-        errexit ("cannot find protocol information for %s", PROTOCOL);
+    if((protoinfo = getprotobyname (PROTOCOL)) == NULL)
+        errexit("cannot find protocol information for %s", PROTOCOL);
 
     /* setup endpoint info */
     memset ((char *)&sin,0x0,sizeof (sin));
     sin.sin_family = AF_INET;
     sin.sin_addr.s_addr = INADDR_ANY;
-    sin.sin_port = htons ((u_short)atoi(port));
+    sin.sin_port = htons((u_short)atoi(port));
 
     /* allocate a socket */
     /*   would be SOCK_DGRAM for UDP */
     sd = socket(PF_INET, SOCK_STREAM, protoinfo->p_proto);
-    if (sd < 0)
+    if(sd < 0)
         errexit("cannot create socket", NULL);
 
     /* bind the socket */
-    if (bind (sd, (struct sockaddr *)&sin, sizeof(sin)) < 0)
-        errexit ("cannot bind to port %s", port);
+    if(bind(sd,(struct sockaddr *)&sin, sizeof(sin)) < 0)
+        errexit("cannot bind to port %s", port);
 
     /* listen for incoming connections */
-    if (listen (sd, QLEN) < 0)
-        errexit ("cannot listen on port %s\n", port);
+    if(listen(sd, QLEN) < 0)
+        errexit("cannot listen on port %s\n", port);
 /* accept, parse, write, and close(sd2) can be repeated to accept more connections from the listening socket.*/
-    addrlen = sizeof (addr);
-    /* accept a connection */
-    while(true)
+    addrlen = sizeof(addr);
+    while(true) //keep looping to accept more connections
     {
-        wroteContent = false;
-        sd2 = accept (sd,&addr,&addrlen);
+        wroteContent = false; //this is specifically to track whether content has been written so we avoid duplicate code for write 
+        /* accept a connection */
+        sd2 = accept (sd,&addr,&addrlen); 
         if (sd2 < 0)
             errexit ("error accepting connection", NULL);
-        /* Parse the http request to see what we do with it*/
-        /* parse the http request using read */
+        /* get the http request using read */
         int totalSize = 0; //temporarily set the totalSize of the http Request to BUFLEN
         httpRequest = (char *)malloc(BUFLEN); //allocate size BUFLEN for http Request
         httpRequest[0] = '\0'; //null terminate http request
         int infoRead = 0;
         char store[BUFLEN]; //temporary storage
         /* Get the header by getting piece by piece and temporarily store it in store, then transfer to httpRequest*/
-        while((infoRead = read(sd2, store, sizeof(store))) > 0)  //as long as sp has the request, store request in httpRequest
+        while((infoRead = read(sd2, store, sizeof(store))) > 0)  //as long as sd2 has the request, store request in httpRequest
         {
             /* dynamically allocate more space to httpRequest if needed */
             if(totalSize + infoRead >= totalSize - 1) //if the existing request plus the new string exceed allocated space, allocate more
@@ -283,15 +269,16 @@ int sockets(){
             }
         }
         res = NULL; //initialize message to null for now;
-   //while true was here
         if(check400(httpRequest))
         { /* 400 malformed request check */ //need more testing but pass the test case on webpage
             res = "HTTP/1.1 400 Malformed Request\r\n\r\n";
         }
-        else{
+        else
+        {
             parseHTTP(); //parse method argument, httpversion
             if(!isHTTP(httpVersion))
             {
+                //if the HTTP does not start with HTTP/
                 res = "HTTP/1.1 501 Protocol Not Implemented\r\n\r\n";
             }
             else
@@ -303,16 +290,17 @@ int sockets(){
                 }  
                 else if(strcmp(method, "SHUTDOWN") == 0)
                 {
-                    //close (sd);
-                    //exit (0);
                     if(strcmp(argument, auth_token) == 0)
                     {
+                        //if the argument match auth_token, can terminate program
                         res = "HTTP/1.1 200 Server Shutting Down\r\n\r\n";
                         if(write (sd2, res,strlen (res)) < 0)
                             errexit ("error writing message: %s", res);
                         break; //not needed perhaps
                     }
-                    else{
+                    else
+                    {
+                        //keep accepting connections
                         res = "HTTP/1.1 403 Operation Forbidden\r\n\r\n";
                     }
                 }
@@ -327,19 +315,21 @@ int sockets(){
                     }
                     else
                     {
-                        if(strcmp(argument, "/") == 0)
+                        if(strcmp(argument, "/") == 0) //if just /, then do the /homepage.html check
                         {
                             loc = fopen(strcat(document_directory, def), "r"); //check the default homepage.html
                         }
-                        else{
+                        else
+                        {
                             loc = fopen(strcat(document_directory, argument), "r");
                         }   
-                        if(loc == NULL) {   
+                        if(loc == NULL) //cannot open the file. it does not exist or cannot be opened
+                        {   
                             res = "HTTP/1.1 404 File Not Found\r\n\r\n";
                         }
                         else
                         {
-                            //200 ok land
+                            //200 ok land, write content
                             res = "HTTP/1.1 200 OK\r\n\r\n";
                             if(write(sd2, res,strlen (res)) < 0)
                                 errexit ("error writing message: %s", res);
@@ -355,16 +345,16 @@ int sockets(){
                                     send(sd2, buffer, bytesRead, 0); //write 1 byte of data to file
                                 }   
                             }
-                            fclose(loc);
+                            fclose(loc); //close the file
                         }
                     }
                 }
-                else{
+                else
+                {
                     //invalid?
                 }
             }
         }
-    //}
         /* write to current TCP connection if just a message and no content*/
         if(!wroteContent) //if content did not get written in then we write, else since we know
         //in the 200 ok land we already wrote http response header, no need to write it again.
@@ -380,6 +370,7 @@ int sockets(){
     close(sd);
     exit(0);
 }
+//isPortInRange: checks if port is in range [1025, 65535]
 bool isPortInRange(char* port)
 {
     int portInt = atoi(port);
@@ -387,31 +378,39 @@ bool isPortInRange(char* port)
     {
         return true;
     }
-    else{
-        errexit("error in getting the port. It is not in range or not a valid port %s\n", portInt);
+    else
+    {
+        errexit("error in getting the port. It is not in range or not a valid port %s\n", port);
         return false;
     }
 }
+//isValidDirectory: checks if we can open the directory or not. basically check if document_directory is a valid input or not
 bool isValidDirectory(char* directory)
 {
-    if(opendir(directory) == NULL)
+    if(directory[0]!='/')
     {
         //directory does not exist
-        errexit("error: cannot open the directory. It is not a valid directory %s\n", directory);
+        errexit("error: directory does not start with /. %s\n", directory);
         return false;
     }
-    else{
-        return true;
-    }
+    return true;
     
 }
+//main: parse, then do the socket.
 int main(int argc, char *argv [])
 {
     parseargs(argc, argv);
     //error check the options
-    if(isPortInRange(port) && isValidDirectory(document_directory)) //port is in range and directory naming is correct
+    if(nDetected&&dDetected&&aDetected) //only do the next step: sockets if we have port, auth_token, and document_directory
     {
-        sockets();
+        if(isPortInRange(port) && isValidDirectory(document_directory)) //port is in range and directory naming is correct
+        {
+            sockets();
+        }
+    }
+    else
+    {
+        errexit("Missing some arguments such as -n, -d, or -a",NULL); 
     }
     return 0;
 }
