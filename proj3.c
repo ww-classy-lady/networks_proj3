@@ -17,12 +17,15 @@
 
 #define ERROR 1
 #define REQUIRED_ARGC 3
+#define NUM_FIELDS 3
 #define HOST_POS 1
 #define PORT_POS 2
 #define PROTOCOL "tcp"
 #define BUFLEN 1024
 #define QLEN 1
 #define httpLength 5
+#define MIN_PORT 1025
+#define MAX_PORT 65535
 
 FILE *sp;
 bool nDetected = false;
@@ -41,6 +44,7 @@ char* argument = NULL;
 char* httpVersion = NULL;
 char* firstRN = NULL;
 char* def = "/homepage.html"; //default if arg = "/"
+FILE *loc; //local file
 //Parse command line
 //get server accepting connections
 //print http requests
@@ -86,37 +90,17 @@ void parseargs(int argc, char *argv [])
                 //anything that is not -u, -o, -d, -q, or -r will prompt program to give an error message and terminate program
                 exit(0);
             default:
-                usage(argv [0]); 
+                usage(argv[0]); 
         }
     }
     if(argv[1] == NULL) //default print message when nothing is entered yet.
     {
         fprintf (stderr,"error: no command line option given\n"); //fprintf is for errors only
-        usage (argv [0]); //gives the program usage details in the usage function above
+        usage (argv[0]); //gives the program usage details in the usage function above
     }
 }
 bool check400(char* request)
 {
-    /*
-   – The request must start with a line of the form “METHOD ARGUMENT HTTP/VERSION”.
-– Each line in the request must be terminated by a carriage-return and linefeed (“\r\n”).
-– The HTTP request must end with a “blank” line that consists only of a carriage-return and
-linefeed (“\r\n”).
-– The HTTP request may contain additional, arbitrary header lines. These must be accepted, but
-will be ignored by your server.
-   */
-   //res = "HTTP/1.1 400 Malformed Request\r\n\r\n" if fails
-   //printf("%s", request); 
-    /*for (int i = 0; point[i] != '\0'; i++) {
-        if (point[i] == '\r') {
-            printf("\\r");
-        } else if (point[i] == '\n') {
-            printf("\\n");
-        } else {
-            printf("%c", point[i]);
-        }
-   }*/
-    //"GET / HTTP/1.1\n\r\n"
    char* copy = (char *)malloc(strlen(request)+1);
    copy[0] = '\0';
    strcpy(copy, request);
@@ -127,7 +111,7 @@ will be ignored by your server.
 
    char* end = NULL;
    int numFields = 0;
-   char* fields[3];
+   char* fields[NUM_FIELDS];
    while(current!=NULL)
    {
         int length = current - begin;
@@ -147,7 +131,7 @@ will be ignored by your server.
                 }
                 numFields++;
             }
-            if(numFields!=3)
+            if(numFields!=NUM_FIELDS)
             {
                 isMalformed = true;
                 break;
@@ -197,22 +181,19 @@ void parseHTTP()
    int vLength = strlen(v);
    strcpy(httpVersion, v);
 }
+//isHTTP: check if the HTTP/VERSION strictly (case sensitive) match the HTTP/ portion for the 5 chracters HTTP/
 bool isHTTP(char* version)
 {
     char firstFive[httpLength];
     strncpy(firstFive, version , httpLength);
     if(strcmp(firstFive, "HTTP/") !=0)
     {
-        //printf("Does not start with HTTP/\n");
         return false;
     }
     else
     {
-        //printf("Does start with HTTP/\n");
         return true;
     }
-    //check if the HTTP/VERSION strictly (case sensitive) match the HTTP/ portion for the 5 chracters HTTP/
-    
 }
 bool getOrShutdown(char* method)
 {
@@ -225,16 +206,15 @@ bool getOrShutdown(char* method)
 }
 bool doesSlashBegin(char* argu)
 {
-    char first[1];
-    strncpy(first, argu , 1);
-    if(strcmp(first, "\\")!=0)
+    if(argu[0] == '/')
     {
-        return false;
-    }
-    else{
         return true;
     }
+    else{
+        return false;
+    }
 }
+
 int sockets(){
 
     struct sockaddr_in sin;
@@ -270,6 +250,8 @@ int sockets(){
         errexit ("cannot listen on port %s\n", port);
 /* accept, parse, write, and close(sd2) can be repeated to accept more connections from the listening socket.*/
     /* accept a connection */
+    while(true)
+    {
     addrlen = sizeof (addr);
     sd2 = accept (sd,&addr,&addrlen);
     if (sd2 < 0)
@@ -315,84 +297,154 @@ int sockets(){
         (b) 200 OK
         (c) 404 File Not Found
     */
-   
-   while(true)
-   {
-        if(check400(httpRequest))
+   //while true was here
+    if(check400(httpRequest))
         { /* 400 malformed request check */ //need more testing but pass the test case on webpage
             res = "HTTP/1.1 400 Malformed Request\r\n\r\n";
+             /* write message to the connection */
+            if(write (sd2, res,strlen (res)) < 0)
+                errexit ("error writing message: %s", res);
             break; //go straight to write message and end this current connection 
         }
-        else{
-            parseHTTP(); //parse method argument, httpversion
-            if(!isHTTP(httpVersion))
+    else{
+        parseHTTP(); //parse method argument, httpversion
+        if(!isHTTP(httpVersion))
+        {
+            res = "HTTP/1.1 501 Protocol Not Implemented\r\n\r\n";
+            /* write message to the connection */
+            if(write (sd2, res,strlen (res)) < 0)
+                errexit ("error writing message: %s", res);
+            break;
+        }
+        else
+        {
+            if(!getOrShutdown(method))
             {
-                res = "HTTP/1.1 501 Protocol Not Implemented\r\n\r\n";
+                //if not get or shutdown in the method
+                res = "HTTP/1.1 405 Unsupported Method\r\n\r\n";
+                /* write message to the connection */
+                if(write (sd2, res,strlen (res)) < 0)
+                    errexit ("error writing message: %s", res);
                 break;
-            }
-            else
+            }  
+            else if(strcmp(method, "SHUTDOWN") == 0)
             {
-                if(!getOrShutdown(method))
+                //close (sd);
+                //exit (0);
+                if(strcmp(argument, auth_token) == 0)
                 {
-                    //if not get or shutdown in the method
-                    res = "HTTP/1.1 405 Unsupported Method\r\n\r\n";
-                    break;
-                }
-                else if(strcmp(method, "GET") == 0){
-                    //step 1:
-                    //1. When the requested file does not begin with a “/”, a minimal HTTP response of “HTTP/1.1 406
-                    //Invalid Filename\r\n\r\n” must be returned.
-                    if(!doesSlashBegin(argument))
-                    {
-                        res = "HTTP/1.1 406 Invalid Filename\r\n\r\n";
-                        break;
-                    }
-                    else{
-                        //cases 2,3,4
-                        /*2. When the requested file exists, a minimal HTTP response header consisting of “HTTP/1.1 200
-                            OK\r\n\r\n” will be given, followed by the contents of the given file.
-                            3. When the requested file cannot be opened (e.g., because it does not exist), a minimal response
-                                header of “HTTP/1.1 404 File Not Found\r\n\r\n” will be returned (with no payload content).
-4. When the requested file is “/” the default file of “/homepage.html” will be used as the filename.
-The web server will then leverage either approach 2 or 3 above based on whether the file exists
-or not.*/
-                        res = "hello world\n";
-                        break;
-                    }
-                }
-                else if(strcmp(method, "SHUTDOWN") == 0)
-                {
-                    //close (sd);
-                    //exit (0);
-                    res = "Entered SHUTDOWN!!!n";
-                    break;
+                    res = "HTTP/1.1 200 Server Shutting Down\r\n\r\n";
+                    if(write (sd2, res,strlen (res)) < 0)
+                        errexit ("error writing message: %s", res);
+                    close(sd2);
+                    close(sd);
+                    exit(0);
+                    break; //not needed perhaps
                 }
                 else{
-                    //invalid?
+                    res = "HTTP/1.1 403 Operation Forbidden\r\n\r\n";
+                    if(write (sd2, res,strlen (res)) < 0)
+                        errexit ("error writing message: %s", res);
+                    break;
                 }
             }
+            else if(strcmp(method, "GET") == 0)
+            {
+                //step 1:
+                //1. When the requested file does not begin with a “/”, a minimal HTTP response of “HTTP/1.1 406
+                //Invalid Filename\r\n\r\n” must be returned.
+                if(!doesSlashBegin(argument))
+                {
+                    res = "HTTP/1.1 406 Invalid Filename\r\n\r\n";
+                    /* write message to the connection */
+                    if(write (sd2, res,strlen (res)) < 0)
+                        errexit ("error writing message: %s", res);
+                    break;
+                }
+                else
+                {
+                    printf("%s\n", document_directory);
+                    if(strcmp(argument, "/") == 0)
+                    {
+                        loc = fopen(strcat(document_directory, def), "r"); //check the default homepage.html
+                    }
+                    else{
+                        loc = fopen(strcat(document_directory, argument), "r");
+                    }   
+                    if(loc == NULL) {   
+                        res = "HTTP/1.1 404 File Not Found\r\n\r\n";
+                        /* write message to the connection */
+                        if(write (sd2, res,strlen (res)) < 0)
+                            errexit ("error writing message: %s", res);
+                        break;
+                    }
+                    else
+                    {
+                        //200 ok land
+                        res = "HTTP/1.1 200 OK\r\n\r\n";
+                        if(write (sd2, res,strlen (res)) < 0)
+                            errexit ("error writing message: %s", res);
+                        char buffer[BUFLEN]; //temporary buffer to store binary data pieces
+                        size_t bufferSize = sizeof(buffer);
+                        size_t bytesRead = 0; //keep track of the bytesRead
+                        while(!feof(loc)) //as long as we are not at the end of the file for socket descriptor, binary data need to be continuous read and written
+                        {
+                            bytesRead = fread(buffer, 1, bufferSize, loc); //read one byte of data from socket descriptor file
+                            if(bytesRead > 0) //got info to write because bytesRead is greater than 0
+                            {
+                                send(sd2, buffer, bytesRead, 0); //write 1 byte of data to file
+                            }   
+                        }
+                        fclose(loc);
+                        break;
+                    }
+                }
+            }
+            else{
+                //invalid?
+            }
         }
-   }
-    /* write message to the connection */
-    if(write (sd2, res,strlen (res)) < 0)
-        errexit ("error writing message: %s", res);
+    }
+   //}
     /* close the current TCP connection*/
     close (sd2);
     /* close listening connection and exit */
-    close (sd);
-    exit (0);
-
+    //close (sd);
+    //exit (0);
+   }
+}
+bool isPortInRange(char* port)
+{
+    int portInt = atoi(port);
+    if(MIN_PORT <= portInt && portInt <= MAX_PORT)
+    {
+        return true;
+    }
+    else{
+        errexit("error in getting the port. It is not in range or not a valid port %s\n", portInt);
+        return false;
+    }
+}
+bool isValidDirectory(char* directory)
+{
+    if(opendir(directory) == NULL)
+    {
+        //directory does not exist
+        errexit("error: cannot open the directory. It is not a valid directory %s\n", directory);
+        return false;
+    }
+    else{
+        return true;
+    }
+    
 }
 int main(int argc, char *argv [])
 {
-    if (access("/home/wxw428/project3/doc-root/5.txt", F_OK) != -1) {
-        // File exists
-        printf("File exists in the current directory.\n");
-    } else {
-        // File doesn't exist
-        printf("File does not exist in the current directory.\n");
-    }
     parseargs(argc, argv);
-    sockets();
+    //error check the options
+    if(isPortInRange(port) && isValidDirectory(document_directory)) //port is in range and directory naming is correct
+    {
+        sockets();
+    }
     return 0;
 }
