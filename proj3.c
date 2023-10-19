@@ -44,6 +44,7 @@ char* argument = NULL;
 char* httpVersion = NULL;
 char* firstRN = NULL;
 char* def = "/homepage.html"; //default if arg = "/"
+bool wroteContent = false;
 FILE *loc; //local file
 //Parse command line
 //get server accepting connections
@@ -253,6 +254,7 @@ int sockets(){
     /* accept a connection */
     while(true)
     {
+        wroteContent = false;
         sd2 = accept (sd,&addr,&addrlen);
         if (sd2 < 0)
             errexit ("error accepting connection", NULL);
@@ -285,20 +287,12 @@ int sockets(){
         if(check400(httpRequest))
         { /* 400 malformed request check */ //need more testing but pass the test case on webpage
             res = "HTTP/1.1 400 Malformed Request\r\n\r\n";
-            /* write message to the connection */
-            if(write (sd2, res,strlen (res)) < 0)
-                errexit ("error writing message: %s", res);
-            break; //go straight to write message and end this current connection 
         }
         else{
             parseHTTP(); //parse method argument, httpversion
             if(!isHTTP(httpVersion))
             {
                 res = "HTTP/1.1 501 Protocol Not Implemented\r\n\r\n";
-                /* write message to the connection */
-                if(write (sd2, res,strlen (res)) < 0)
-                    errexit ("error writing message: %s", res);
-                break;
             }
             else
             {
@@ -306,10 +300,6 @@ int sockets(){
                 {
                     //if not get or shutdown in the method
                     res = "HTTP/1.1 405 Unsupported Method\r\n\r\n";
-                    /* write message to the connection */
-                    if(write (sd2, res,strlen (res)) < 0)
-                        errexit ("error writing message: %s", res);
-                    break;
                 }  
                 else if(strcmp(method, "SHUTDOWN") == 0)
                 {
@@ -320,16 +310,10 @@ int sockets(){
                         res = "HTTP/1.1 200 Server Shutting Down\r\n\r\n";
                         if(write (sd2, res,strlen (res)) < 0)
                             errexit ("error writing message: %s", res);
-                        close(sd2);
-                        close(sd);
-                        exit(0);
                         break; //not needed perhaps
                     }
                     else{
                         res = "HTTP/1.1 403 Operation Forbidden\r\n\r\n";
-                        if(write (sd2, res,strlen (res)) < 0)
-                            errexit ("error writing message: %s", res);
-                        break;
                     }
                 }
                 else if(strcmp(method, "GET") == 0)
@@ -340,14 +324,9 @@ int sockets(){
                     if(!doesSlashBegin(argument))
                     {
                         res = "HTTP/1.1 406 Invalid Filename\r\n\r\n";
-                        /* write message to the connection */
-                        if(write (sd2, res,strlen (res)) < 0)
-                            errexit ("error writing message: %s", res);
-                        break;
                     }
                     else
                     {
-                        printf("%s\n", document_directory);
                         if(strcmp(argument, "/") == 0)
                         {
                             loc = fopen(strcat(document_directory, def), "r"); //check the default homepage.html
@@ -357,17 +336,14 @@ int sockets(){
                         }   
                         if(loc == NULL) {   
                             res = "HTTP/1.1 404 File Not Found\r\n\r\n";
-                            /* write message to the connection */
-                            if(write (sd2, res,strlen (res)) < 0)
-                                errexit ("error writing message: %s", res);
-                            break;
                         }
                         else
                         {
                             //200 ok land
                             res = "HTTP/1.1 200 OK\r\n\r\n";
-                            if(write (sd2, res,strlen (res)) < 0)
+                            if(write(sd2, res,strlen (res)) < 0)
                                 errexit ("error writing message: %s", res);
+                            wroteContent = true;
                             char buffer[BUFLEN]; //temporary buffer to store binary data pieces
                             size_t bufferSize = sizeof(buffer);
                             size_t bytesRead = 0; //keep track of the bytesRead
@@ -380,7 +356,6 @@ int sockets(){
                                 }   
                             }
                             fclose(loc);
-                            break;
                         }
                     }
                 }
@@ -390,12 +365,20 @@ int sockets(){
             }
         }
     //}
+        /* write to current TCP connection if just a message and no content*/
+        if(!wroteContent) //if content did not get written in then we write, else since we know
+        //in the 200 ok land we already wrote http response header, no need to write it again.
+        {
+            if(write (sd2, res,strlen (res)) < 0)
+                errexit ("error writing message: %s", res);
+        }
         /* close the current TCP connection*/
-        close (sd2);
-        /* close listening connection and exit */
-        //close (sd);
-        //exit (0);
+        close(sd2);
    }
+   /* close listening connection and exit */
+    close(sd2);
+    close(sd);
+    exit(0);
 }
 bool isPortInRange(char* port)
 {
